@@ -1,0 +1,8 @@
+<library path="phidgets_hardware">
+  <class
+    name="phidgets_hardware/PhidgetsBldcHardware"
+    type="phidgets_hardware::PhidgetsBldcHardware"
+    base_class_type="hardware_interface::ActuatorInterface">
+    <description>ros2_control hardware interface for a single Phidgets BLDC motor (Phidget22 C API).</description>
+  </class>
+</library>

@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="phidgets_single_motor">
+
+  <link name="base_link"/>
+  <link name="motor_link"/>
+
+  <joint name="motor_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="motor_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <ros2_control name="PhidgetsBLDC" type="actuator">
+    <hardware>
+      <plugin>phidgets_hardware/PhidgetsBldcHardware</plugin>
+
+      <!-- Your addressing -->
+      <param name="device_serial">766944</param>
+      <param name="hub_port">0</param>
+      <param name="channel">0</param>
+
+      <!-- Your gearbox -->
+      <param name="gear_ratio">106.0</param>
+      <param name="acceleration">5.0</param>
+      <param name="stall_velocity">0.0</param>
+
+      <!-- Default: 8-pole, 3-phase => 24 commutations per motor rev (common for BLDC).
+           Your 106:1 motor listing is an 8-pole BLDC gear motor. -->
+      <param name="commutations_per_motor_rev">24</param>
+
+      <!-- clamp duty command -->
+      <param name="command_limit">1.0</param>
+    </hardware>
+
+    <joint name="motor_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+</robot>
