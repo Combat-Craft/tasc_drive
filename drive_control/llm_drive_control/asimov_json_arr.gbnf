@@ -1,0 +1,39 @@
+# Strict JSON output for single BLDC motor command
+# Output shape:
+# {"action":"drive","direction":"forward","speed":0.3,"duration_s":2.0}
+
+root   ::= value
+
+value  ::= object ws
+
+object ::=
+  "{" ws (
+    "\"action\"" ws ":" ws "\"drive\"" ws "," ws
+    "\"direction\"" ws ":" ws direction ws "," ws
+    "\"speed\"" ws ":" ws speed ws "," ws
+    "\"duration_s\"" ws ":" ws duration
+  ) ws "}"
+
+direction ::= ("\"forward\"" | "\"backward\"" | "\"stop\"")
+
+speed ::= (
+    "0"
+  | "1"
+  | "0." digits
+  | "1.0"
+  | "1.0" digits
+)
+
+duration ::= (
+    int03
+  | int03 "." digits
+)
+
+int03 ::= ("0" | "1" | "2" | "3")
+
+digits ::= digit | digit digits
+digit  ::= ("0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+
+# Optional space: same style as your original grammar
+ws ::= | " " | "\n" [ \t]{0,20}
+792712418.207742@[648018978025958] (UTM):* SLSGetNextEventRecordInternal: loc (1284.7, 258.9) conn 0xd020b Gesture win 0xb123 Subtype 32
