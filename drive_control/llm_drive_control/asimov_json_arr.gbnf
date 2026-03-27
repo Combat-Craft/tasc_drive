@@ -14,7 +14,7 @@ object ::=
     "\"duration_s\"" ws ":" ws duration
   ) ws "}"
 
-direction ::= ("\"forward\"" | "\"backward\"" | "\"stop\"")
+direction ::= ("\"forward\"" | "\"backward\"" | "\"left\"" | "\"right\"" | "\"stop\"")
 
 speed ::= (
     "0"
@@ -29,11 +29,10 @@ duration ::= (
   | int03 "." digits
 )
 
-int03 ::= ("0" | "1" | "2" | "3")
+int03 ::= ("0" | "1" | "2" | "3" | "4" | "5")
 
 digits ::= digit | digit digits
 digit  ::= ("0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
 
-# Optional space: same style as your original grammar
+# Optional space: same style as original grammar
 ws ::= | " " | "\n" [ \t]{0,20}
-792712418.207742@[648018978025958] (UTM):* SLSGetNextEventRecordInternal: loc (1284.7, 258.9) conn 0xd020b Gesture win 0xb123 Subtype 32
