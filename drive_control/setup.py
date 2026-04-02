@@ -20,6 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'motor_position_publisher = drive_control.motor_position_publisher:main',
         ],
     },
 )

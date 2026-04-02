@@ -10,6 +10,7 @@ find_package(rclcpp REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(controller_manager REQUIRED)
+find_package(std_msgs REQUIRED)
 
 include_directories(include)
 
@@ -21,6 +22,21 @@ ament_target_dependencies(phidgets_hardware
   rclcpp
   hardware_interface
   pluginlib
+  std_msgs
+)
+
+add_executable(ps4_teleop src/ps4_teleop.cpp)
+
+ament_target_dependencies(ps4_teleop
+  rclcpp
+  sensor_msgs
+  geometry_msgs
+  std_msgs
+)
+
+install(TARGETS
+  ps4_teleop
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 # Phidgets (Phidget22) C library + headers
@@ -41,7 +57,7 @@ install(DIRECTORY include/
   DESTINATION include
 )
 
-install(DIRECTORY description config launch
+install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
 

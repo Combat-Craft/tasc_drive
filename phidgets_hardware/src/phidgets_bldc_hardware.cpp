@@ -1,6 +1,10 @@
 #include "phidgets_hardware/phidgets_bldc_hardware.hpp"
 
 #include <cmath>
+#include <iomanip>
+#include <sstream>
+
+#include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -11,13 +15,13 @@ namespace phidgets_hardware
 hardware_interface::CallbackReturn
 PhidgetsBldcHardware::on_init(const hardware_interface::HardwareInfo & info)
 {
-  if (hardware_interface::ActuatorInterface::on_init(info) != hardware_interface::CallbackReturn::SUCCESS) {
+  if (hardware_interface::SystemInterface::on_init(info) != hardware_interface::CallbackReturn::SUCCESS) {
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  if (info_.joints.size() != 1) {
+  if (info_.joints.size() != NUM_MOTORS) {
     RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
-                 "Expected exactly 1 joint, got %zu", info_.joints.size());
+                 "Expected %d joints, got %zu", NUM_MOTORS, info_.joints.size());
     return hardware_interface::CallbackReturn::ERROR;
   }
 
@@ -26,24 +30,29 @@ PhidgetsBldcHardware::on_init(const hardware_interface::HardwareInfo & info)
     return (it == info_.hardware_parameters.end()) ? def : it->second;
   };
 
-  device_serial_ = std::stoi(get_param("device_serial", "0"));
-  hub_port_      = std::stoi(get_param("hub_port", "0"));
-  channel_       = std::stoi(get_param("channel", "0"));
-
   gear_ratio_ = std::stod(get_param("gear_ratio", "106.0"));
   commutations_per_motor_rev_ = std::stoi(get_param("commutations_per_motor_rev", "24"));
   acceleration_ = std::stod(get_param("acceleration", "5.0"));
   stall_velocity_ = std::stod(get_param("stall_velocity", "0.0"));
   command_limit_ = std::stod(get_param("command_limit", "1.0"));
+  attachment_retry_period_sec_ = std::stod(get_param("attachment_retry_period_sec", "1.0"));
 
-  // Rotations per commutation at OUTPUT shaft
-  rescale_factor_rot_ = 1.0 / (gear_ratio_ * static_cast<double>(commutations_per_motor_rev_));
+  rescale_factor_rot_ =
+    1.0 / (gear_ratio_ * static_cast<double>(commutations_per_motor_rev_));
 
-  cmd_ = 0.0;
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    cmd_[i] = 0.0;
+    temperature_c_[i] = 0.0;
+    last_attachment_attempt_sec_[i] = -attachment_retry_period_sec_;
+  }
+
+  telemetry_node_ = rclcpp::Node::make_shared("phidgets_motor_telemetry_bridge");
+  telemetry_pub_ = telemetry_node_->create_publisher<std_msgs::msg::String>(
+    "/rover/drive/motor_telemetry",
+    10);
 
   RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"),
-              "Init: serial=%d hub_port=%d channel=%d gear_ratio=%.3f commutations_per_motor_rev=%d command_limit=%.3f",
-              device_serial_, hub_port_, channel_, gear_ratio_, commutations_per_motor_rev_, command_limit_);
+              "Init complete for %d motors", NUM_MOTORS);
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -52,8 +61,19 @@ std::vector<hardware_interface::StateInterface>
 PhidgetsBldcHardware::export_state_interfaces()
 {
   std::vector<hardware_interface::StateInterface> state_interfaces;
-  state_interfaces.emplace_back(info_.joints[0].name, hardware_interface::HW_IF_POSITION, &pos_rad_);
-  state_interfaces.emplace_back(info_.joints[0].name, hardware_interface::HW_IF_VELOCITY, &vel_state_);
+
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    state_interfaces.emplace_back(
+      info_.joints[i].name,
+      hardware_interface::HW_IF_POSITION,
+      &pos_rad_[i]);
+
+    state_interfaces.emplace_back(
+      info_.joints[i].name,
+      hardware_interface::HW_IF_VELOCITY,
+      &vel_state_[i]);
+  }
+
   return state_interfaces;
 }
 
@@ -61,7 +81,14 @@ std::vector<hardware_interface::CommandInterface>
 PhidgetsBldcHardware::export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
-  command_interfaces.emplace_back(info_.joints[0].name, hardware_interface::HW_IF_VELOCITY, &cmd_);
+
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    command_interfaces.emplace_back(
+      info_.joints[i].name,
+      hardware_interface::HW_IF_VELOCITY,
+      &cmd_[i]);
+  }
+
   return command_interfaces;
 }
 
@@ -70,85 +97,20 @@ PhidgetsBldcHardware::on_activate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"), "Activating...");
 
-  close_phidget();
-  attached_ = false;
-
-  PhidgetReturnCode rc = PhidgetBLDCMotor_create(&motor_);
-  if (rc != EPHIDGET_OK || motor_ == nullptr) {
-    RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
-                 "PhidgetBLDCMotor_create failed: %d", rc);
-    return hardware_interface::CallbackReturn::ERROR;
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    close_phidget(i);
+    close_temperature_sensor(i);
+    attached_[i] = false;
+    temperature_attached_[i] = false;
+    try_attach_motor(i);
+    if (attached_[i]) {
+      try_attach_temperature_sensor(i);
+    }
   }
 
-  rc = Phidget_setDeviceSerialNumber((PhidgetHandle)motor_, device_serial_);
-  if (rc != EPHIDGET_OK) {
-    RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
-                 "Phidget_setDeviceSerialNumber failed: %d", rc);
-    close_phidget();
-    return hardware_interface::CallbackReturn::ERROR;
-  }
-
-  rc = Phidget_setHubPort((PhidgetHandle)motor_, hub_port_);
-  if (rc != EPHIDGET_OK) {
-    RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
-                 "Phidget_setHubPort failed: %d", rc);
-    close_phidget();
-    return hardware_interface::CallbackReturn::ERROR;
-  }
-
-  rc = Phidget_setChannel((PhidgetHandle)motor_, channel_);
-  if (rc != EPHIDGET_OK) {
-    RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
-                 "Phidget_setChannel failed: %d", rc);
-    close_phidget();
-    return hardware_interface::CallbackReturn::ERROR;
-  }
-
-  rc = Phidget_openWaitForAttachment((PhidgetHandle)motor_, 5000);
-  if (rc != EPHIDGET_OK) {
-    RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
-                 "Phidget_openWaitForAttachment failed: %d", rc);
-    close_phidget();
-    return hardware_interface::CallbackReturn::ERROR;
-  }
-
-  attached_ = true;
-
-  // Optional: rescale factor (only if your phidget22.h provides it)
-  // If this line fails to compile on your system, delete this block entirely.
-  rc = PhidgetBLDCMotor_setRescaleFactor(motor_, rescale_factor_rot_);
-  if (rc != EPHIDGET_OK) {
-    RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"),
-                "PhidgetBLDCMotor_setRescaleFactor failed (continuing): %d", rc);
-  }
-
-  rc = PhidgetBLDCMotor_setAcceleration(motor_, acceleration_);
-  if (rc != EPHIDGET_OK) {
-    const char * err = nullptr;
-    Phidget_getErrorDescription(rc, &err);
-    RCLCPP_WARN(
-      rclcpp::get_logger("PhidgetsBldcHardware"),
-      "Failed to set acceleration %.3f (rc=%d, %s)",
-      acceleration_, rc, err ? err : "unknown"
-    );
-  } else {
-    RCLCPP_INFO(
-      rclcpp::get_logger("PhidgetsBldcHardware"),
-      "BLDC acceleration set to %.3f duty/s",
-      acceleration_
-    );
-  }
-
-  rc = PhidgetBLDCMotor_setStallVelocity(motor_, stall_velocity_);
-
-  // Start stopped using the correct API function you referenced
-  rc = PhidgetBLDCMotor_setTargetVelocity(motor_, 0.0);
-  if (rc != EPHIDGET_OK) {
-    RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"),
-                "PhidgetBLDCMotor_setTargetVelocity(0.0) failed: %d", rc);
-  }
-
-  RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"), "Activated.");
+  RCLCPP_INFO(
+    rclcpp::get_logger("PhidgetsBldcHardware"),
+    "Activated. Motors that are powered later will be attached on retry.");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -157,41 +119,74 @@ PhidgetsBldcHardware::on_deactivate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"), "Deactivating...");
 
-  if (motor_) {
-    (void)PhidgetBLDCMotor_setTargetVelocity(motor_, 0.0);
-  }
+  for (int i = 0; i < NUM_MOTORS; i++) {
 
-  close_phidget();
-  attached_ = false;
+    if (motors_[i]) {
+      PhidgetBLDCMotor_setTargetVelocity(motors_[i], 0.0);
+    }
+
+    close_phidget(i);
+    close_temperature_sensor(i);
+    attached_[i] = false;
+    temperature_attached_[i] = false;
+  }
 
   RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"), "Deactivated.");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 hardware_interface::return_type
-PhidgetsBldcHardware::read(const rclcpp::Time &, const rclcpp::Duration &)
+PhidgetsBldcHardware::read(const rclcpp::Time & time, const rclcpp::Duration &)
 {
-  if (!attached_ || !motor_) {
-    return hardware_interface::return_type::OK;
+  retry_unattached_devices(time);
+
+  for (int i = 0; i < NUM_MOTORS; i++) {
+
+    if (!attached_[i] || !motors_[i])
+      continue;
+
+    double vel_duty = 0.0;
+    double pos_val = 0.0;
+
+    auto rc_v = PhidgetBLDCMotor_getVelocity(motors_[i], &vel_duty);
+
+    if (rc_v == EPHIDGET_OK) {
+      vel_state_[i] = vel_duty * direction_sign_[i];
+    } else {
+      close_phidget(i);
+      close_temperature_sensor(i);
+      attached_[i] = false;
+      temperature_attached_[i] = false;
+      vel_state_[i] = 0.0;
+      continue;
+    }
+
+    auto rc_p = PhidgetBLDCMotor_getPosition(motors_[i], &pos_val);
+
+    if (rc_p == EPHIDGET_OK) {
+      pos_rad_[i] = pos_val * 2.0 * M_PI * direction_sign_[i];
+    } else {
+      close_phidget(i);
+      close_temperature_sensor(i);
+      attached_[i] = false;
+      temperature_attached_[i] = false;
+      vel_state_[i] = 0.0;
+      continue;
+    }
+
+    if (temperature_attached_[i] && temperature_sensors_[i]) {
+      double temperature_val = 0.0;
+      auto rc_t = PhidgetTemperatureSensor_getTemperature(temperature_sensors_[i], &temperature_val);
+      if (rc_t == EPHIDGET_OK) {
+        temperature_c_[i] = temperature_val;
+      } else {
+        close_temperature_sensor(i);
+        temperature_attached_[i] = false;
+      }
+    }
   }
 
-  // Velocity unit in BLDCMotor API is duty cycle
-  double vel_duty = 0.0;
-  double pos_val = 0.0;
-
-  auto rc_v = PhidgetBLDCMotor_getVelocity(motor_, &vel_duty);
-  if (rc_v == EPHIDGET_OK) {
-    vel_state_ = vel_duty;
-  }
-
-  // Position: if rescaleFactor is set, pos_val is in rotations (as we intended).
-  // If rescaleFactor is not supported, pos_val will be in commutations.
-  auto rc_p = PhidgetBLDCMotor_getPosition(motor_, &pos_val);
-  if (rc_p == EPHIDGET_OK) {
-    // Assume pos_val is rotations (if rescale worked); convert to radians.
-    // If you removed rescale support, this will not be meaningful until you convert commutations->rot.
-    pos_rad_ = pos_val * 2.0 * M_PI;
-  }
+  publish_motor_telemetry(time);
 
   return hardware_interface::return_type::OK;
 }
@@ -199,33 +194,192 @@ PhidgetsBldcHardware::read(const rclcpp::Time &, const rclcpp::Duration &)
 hardware_interface::return_type
 PhidgetsBldcHardware::write(const rclcpp::Time &, const rclcpp::Duration &)
 {
-  if (!attached_ || !motor_) {
+  if (!all_motors_attached()) {
+    for (int i = 0; i < NUM_MOTORS; i++) {
+      if (motors_[i]) {
+        PhidgetBLDCMotor_setTargetVelocity(motors_[i], 0.0);
+      }
+    }
     return hardware_interface::return_type::OK;
   }
 
-  // Treat command as duty cycle; clamp
-  const double duty = clamp(cmd_, -command_limit_, command_limit_);
+  for (int i = 0; i < NUM_MOTORS; i++) {
 
-  const auto rc = PhidgetBLDCMotor_setTargetVelocity(motor_, duty);
+    if (!attached_[i] || !motors_[i])
+      continue;
 
-  
-  if (rc != EPHIDGET_OK) {
-    RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"),
-                "PhidgetBLDCMotor_setTargetVelocity(%f) failed: %d", duty, rc);
+    const double duty = clamp(cmd_[i] * direction_sign_[i], -command_limit_, command_limit_);
+
+    auto rc = PhidgetBLDCMotor_setTargetVelocity(motors_[i], duty);
+
+    if (rc != EPHIDGET_OK) {
+      RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"),
+                  "Motor %d velocity command failed", i);
+      close_phidget(i);
+      close_temperature_sensor(i);
+      attached_[i] = false;
+      temperature_attached_[i] = false;
+    }
   }
 
   return hardware_interface::return_type::OK;
 }
 
-void PhidgetsBldcHardware::close_phidget()
+void PhidgetsBldcHardware::close_phidget(int i)
 {
-  if (motor_) {
-    (void)Phidget_close((PhidgetHandle)motor_);
-    (void)PhidgetBLDCMotor_delete(&motor_);
-    motor_ = nullptr;
+  if (motors_[i]) {
+    Phidget_close((PhidgetHandle)motors_[i]);
+    PhidgetBLDCMotor_delete(&motors_[i]);
+    motors_[i] = nullptr;
   }
+}
+
+void PhidgetsBldcHardware::close_temperature_sensor(int i)
+{
+  if (temperature_sensors_[i]) {
+    Phidget_close((PhidgetHandle)temperature_sensors_[i]);
+    PhidgetTemperatureSensor_delete(&temperature_sensors_[i]);
+    temperature_sensors_[i] = nullptr;
+  }
+}
+
+void PhidgetsBldcHardware::try_attach_motor(int i)
+{
+  close_phidget(i);
+  attached_[i] = false;
+
+  PhidgetReturnCode rc = PhidgetBLDCMotor_create(&motors_[i]);
+  if (rc != EPHIDGET_OK || motors_[i] == nullptr) {
+    RCLCPP_WARN(
+      rclcpp::get_logger("PhidgetsBldcHardware"),
+      "Motor %d create failed; will retry",
+      i);
+    close_phidget(i);
+    return;
+  }
+
+  Phidget_setDeviceSerialNumber((PhidgetHandle)motors_[i], device_serial_[i]);
+  Phidget_setHubPort((PhidgetHandle)motors_[i], hub_port_[i]);
+  Phidget_setChannel((PhidgetHandle)motors_[i], channel_[i]);
+
+  rc = Phidget_openWaitForAttachment((PhidgetHandle)motors_[i], 500);
+  if (rc != EPHIDGET_OK) {
+    close_phidget(i);
+    return;
+  }
+
+  attached_[i] = true;
+  PhidgetBLDCMotor_setRescaleFactor(motors_[i], rescale_factor_rot_);
+  PhidgetBLDCMotor_setAcceleration(motors_[i], acceleration_);
+  PhidgetBLDCMotor_setStallVelocity(motors_[i], stall_velocity_);
+
+  rc = PhidgetBLDCMotor_setTargetVelocity(motors_[i], 0.0);
+  if (rc != EPHIDGET_OK) {
+    RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"),
+                "Motor %d start velocity failed", i);
+  }
+
+  RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"),
+              "Motor %d attached successfully", i);
+}
+
+void PhidgetsBldcHardware::try_attach_temperature_sensor(int i)
+{
+  close_temperature_sensor(i);
+  temperature_attached_[i] = false;
+
+  PhidgetReturnCode rc = PhidgetTemperatureSensor_create(&temperature_sensors_[i]);
+  if (rc != EPHIDGET_OK || temperature_sensors_[i] == nullptr) {
+    return;
+  }
+
+  Phidget_setDeviceSerialNumber((PhidgetHandle)temperature_sensors_[i], device_serial_[i]);
+  Phidget_setHubPort((PhidgetHandle)temperature_sensors_[i], hub_port_[i]);
+  Phidget_setChannel((PhidgetHandle)temperature_sensors_[i], channel_[i]);
+
+  rc = Phidget_openWaitForAttachment((PhidgetHandle)temperature_sensors_[i], 500);
+  if (rc != EPHIDGET_OK) {
+    close_temperature_sensor(i);
+    return;
+  }
+
+  temperature_attached_[i] = true;
+}
+
+void PhidgetsBldcHardware::retry_unattached_devices(const rclcpp::Time & time)
+{
+  const double now_sec = time.seconds();
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    if ((now_sec - last_attachment_attempt_sec_[i]) < attachment_retry_period_sec_) {
+      continue;
+    }
+    last_attachment_attempt_sec_[i] = now_sec;
+
+    if (!attached_[i]) {
+      try_attach_motor(i);
+    }
+    if (attached_[i] && !temperature_attached_[i]) {
+      try_attach_temperature_sensor(i);
+    }
+  }
+}
+
+bool PhidgetsBldcHardware::all_motors_attached() const
+{
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    if (!attached_[i] || !motors_[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void PhidgetsBldcHardware::publish_motor_telemetry(const rclcpp::Time & time)
+{
+  if (!telemetry_pub_) {
+    return;
+  }
+
+  if (last_telemetry_publish_time_.nanoseconds() != 0 &&
+      (time - last_telemetry_publish_time_).seconds() < telemetry_publish_period_sec_)
+  {
+    return;
+  }
+  last_telemetry_publish_time_ = time;
+
+  std::ostringstream stream;
+  stream << std::fixed << std::setprecision(4);
+  stream << "{\"motors\":[";
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    const bool motor_attached = attached_[i] && motors_[i] != nullptr;
+    const bool temp_attached = temperature_attached_[i] && temperature_sensors_[i] != nullptr;
+    const std::string health = motor_attached ? (temp_attached ? "healthy" : "warning") : "offline";
+    const std::string fault = motor_attached ? (temp_attached ? "None" : "Temperature sensor unavailable") : "Motor not attached";
+
+    if (i > 0) {
+      stream << ",";
+    }
+    stream << "{"
+           << "\"name\":\"" << info_.joints[i].name << "\","
+           << "\"attached\":" << (motor_attached ? "true" : "false") << ","
+           << "\"position\":" << pos_rad_[i] << ","
+           << "\"velocity\":" << vel_state_[i] << ","
+           << "\"temperature\":" << temperature_c_[i] << ","
+           << "\"health\":\"" << health << "\","
+           << "\"fault\":\"" << fault << "\","
+           << "\"last_update\":\"" << std::to_string(time.seconds()) << "\""
+           << "}";
+  }
+  stream << "]}";
+
+  std_msgs::msg::String msg;
+  msg.data = stream.str();
+  telemetry_pub_->publish(msg);
 }
 
 }  // namespace phidgets_hardware
 
-PLUGINLIB_EXPORT_CLASS(phidgets_hardware::PhidgetsBldcHardware, hardware_interface::ActuatorInterface)
+PLUGINLIB_EXPORT_CLASS(
+  phidgets_hardware::PhidgetsBldcHardware,
+  hardware_interface::SystemInterface
+)

@@ -13,10 +13,20 @@
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>controller_manager</depend>
+  <depend>std_msgs</depend>
+
+  <!-- Needed for teleop and cmd_vel -->
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>joy</depend>
 
   <exec_depend>xacro</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
+
+    <!-- REQUIRED so ros2_control can load your hardware plugin -->
+    <pluginlib plugin="${prefix}/phidgets_hardware_plugin.xml"/>
   </export>
+
 </package>
