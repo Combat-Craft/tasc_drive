@@ -31,6 +31,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QScrollArea,
+    QSizePolicy,
+    QSplitter,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -210,12 +213,13 @@ class TopologyComponentBlock(QFrame):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(10, 10, 10, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
 
         title_row = QHBoxLayout()
         self.title = QLabel(self.state.display_name)
-        self.title.setObjectName('cardTitle')
+        self.title.setObjectName('topologyTitle')
+        self.title.setWordWrap(True)
         self.badge = StatusBadge('OFFLINE', 'offline')
         title_row.addWidget(self.title)
         title_row.addStretch(1)
@@ -223,7 +227,8 @@ class TopologyComponentBlock(QFrame):
         root.addLayout(title_row)
 
         self.summary = QLabel('Power OFF')
-        self.summary.setObjectName('metaLabel')
+        self.summary.setWordWrap(True)
+        self.summary.setObjectName('topologySummary')
         root.addWidget(self.summary)
 
         self.stats = QLabel('No telemetry')
@@ -237,9 +242,12 @@ class TopologyComponentBlock(QFrame):
         root.addWidget(self.fault_label)
 
         button_row = QHBoxLayout()
+        button_row.setSpacing(8)
         self.toggle_button = QPushButton('Power ON')
+        self.toggle_button.setMinimumHeight(34)
         self.toggle_button.clicked.connect(self._emit_toggle)
         self.detail_button = QPushButton('Details')
+        self.detail_button.setMinimumHeight(34)
         self.detail_button.clicked.connect(lambda: self.details_requested.emit(self.component_name))
         button_row.addWidget(self.toggle_button)
         button_row.addWidget(self.detail_button)
@@ -252,17 +260,16 @@ class TopologyComponentBlock(QFrame):
         self.state = state
         self.title.setText(state.display_name)
         self.badge.set_status(state.health.upper(), state.health)
-        self.summary.setText(
-            f'Power {state.status_label} | Channel {state.channel} | Bus {state.voltage:0.1f} V'
-        )
+        self.summary.setText(f'Power {state.status_label}   Ch {state.channel}   Bus {state.voltage:0.1f} V')
         if state.is_motor:
             self.stats.setText(
-                f'Temp {state.temperature:0.1f} C | Vel {state.velocity:0.2f} rad/s\n'
-                f'Pos {state.position:0.2f} rad | Current {state.current:0.2f} A'
+                f'Temp {state.temperature:0.1f} C   Vel {state.velocity:0.2f} rad/s\n'
+                f'Pos {state.position:0.2f} rad   Cur {state.current:0.2f} A'
             )
         else:
-            self.stats.setText('Headlight telemetry pending.\nCurrent focus: relay on/off state.')
-        self.fault_label.setText(f'Fault: {state.fault}')
+            self.stats.setText('Relay control active.\nOn/off state only for now.')
+        fault_text = state.fault if state.fault and state.fault != 'None' else 'Ready'
+        self.fault_label.setText(f'Status: {fault_text}')
         self.toggle_button.setText('Power OFF' if state.enabled else 'Power ON')
 
 
@@ -273,6 +280,8 @@ class TopologyGraphView(QFrame):
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName('topologyGraph')
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(1320, 980)
         self.components: Dict[str, TopologyComponentBlock] = {}
         self.battery = QFrame(self)
         self.battery.setObjectName('systemBlock')
@@ -311,29 +320,29 @@ class TopologyGraphView(QFrame):
         self._layout_children()
 
     def _layout_children(self) -> None:
-        width = self.width()
-        height = self.height()
+        width = max(self.width(), self.minimumWidth())
+        height = max(self.height(), self.minimumHeight())
         if width <= 0 or height <= 0:
             return
 
         battery_rect = self._rect(width * 0.39, height * 0.03, width * 0.22, height * 0.10)
-        bus_rect = self._rect(width * 0.36, height * 0.20, width * 0.28, height * 0.12)
+        bus_rect = self._rect(width * 0.35, height * 0.18, width * 0.30, height * 0.11)
         self.battery.setGeometry(*battery_rect)
         self.bus.setGeometry(*bus_rect)
         self._layout_system_block(self.battery, self.battery_label, self.battery_value)
         self._layout_system_block(self.bus, self.bus_label, self.bus_value)
 
         positions = {
-            'Left Headlight': self._rect(width * 0.05, height * 0.08, width * 0.22, height * 0.20),
-            'Right Headlight': self._rect(width * 0.73, height * 0.08, width * 0.22, height * 0.20),
-            'front_left_wheel_joint': self._rect(width * 0.03, height * 0.40, width * 0.28, height * 0.22),
-            'front_right_wheel_joint': self._rect(width * 0.69, height * 0.40, width * 0.28, height * 0.22),
-            'rear_left_wheel_joint': self._rect(width * 0.03, height * 0.70, width * 0.28, height * 0.22),
-            'rear_right_wheel_joint': self._rect(width * 0.69, height * 0.70, width * 0.28, height * 0.22),
+            'Left Headlight': self._rect(width * 0.03, height * 0.05, width * 0.27, height * 0.24),
+            'Right Headlight': self._rect(width * 0.70, height * 0.05, width * 0.27, height * 0.24),
+            'front_left_wheel_joint': self._rect(width * 0.02, height * 0.35, width * 0.32, height * 0.27),
+            'front_right_wheel_joint': self._rect(width * 0.66, height * 0.35, width * 0.32, height * 0.27),
+            'rear_left_wheel_joint': self._rect(width * 0.02, height * 0.67, width * 0.32, height * 0.27),
+            'rear_right_wheel_joint': self._rect(width * 0.66, height * 0.67, width * 0.32, height * 0.27),
         }
 
         for name, block in self.components.items():
-            rect = positions.get(name, self._rect(width * 0.34, height * 0.62, width * 0.30, height * 0.20))
+            rect = positions.get(name, self._rect(width * 0.34, height * 0.60, width * 0.32, height * 0.24))
             block.setGeometry(*rect)
 
     def _layout_system_block(self, frame: QFrame, title: QLabel, value: QLabel) -> None:
@@ -564,32 +573,41 @@ class DashboardWindow(QMainWindow):
         self.summary = SummaryStrip()
         root.addWidget(self.summary)
 
-        content = QGridLayout()
-        content.setSpacing(12)
-        root.addLayout(content, 1)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
+        root.addWidget(main_splitter, 1)
 
         topology_box = QGroupBox('Rover Topology')
         topology_layout = QVBoxLayout(topology_box)
+        topology_layout.setContentsMargins(8, 18, 8, 8)
+        topology_scroll = QScrollArea()
+        topology_scroll.setWidgetResizable(False)
+        topology_scroll.setFrameShape(QFrame.NoFrame)
+        topology_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        topology_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.topology = TopologyGraphView()
         self.topology.toggled.connect(self.on_toggle_component)
         self.topology.details_requested.connect(self.on_show_details)
-        topology_layout.addWidget(self.topology)
-        content.addWidget(topology_box, 0, 0, 2, 1)
+        topology_scroll.setWidget(self.topology)
+        topology_layout.addWidget(topology_scroll)
+        main_splitter.addWidget(topology_box)
+
+        side_column = QWidget()
+        side_layout = QVBoxLayout(side_column)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(12)
 
         self.rviz_panel = UrdfVisualLauncher()
-        content.addWidget(self.rviz_panel, 0, 1)
-
+        side_layout.addWidget(self.rviz_panel)
         self.detail_panel = DetailPanel()
-        content.addWidget(self.detail_panel, 1, 1)
+        side_layout.addWidget(self.detail_panel, 1)
+        main_splitter.addWidget(side_column)
+        main_splitter.setStretchFactor(0, 4)
+        main_splitter.setStretchFactor(1, 1)
+        main_splitter.setSizes([1180, 360])
 
         self.log_panel = LogPanel()
-        content.addWidget(self.log_panel, 2, 0, 1, 2)
-
-        content.setColumnStretch(0, 3)
-        content.setColumnStretch(1, 1)
-        content.setRowStretch(0, 0)
-        content.setRowStretch(1, 1)
-        content.setRowStretch(2, 1)
+        root.addWidget(self.log_panel)
 
         self.setCentralWidget(central)
 
@@ -607,16 +625,20 @@ class DashboardWindow(QMainWindow):
                 background: #111827; border: 1px solid #263241; border-radius: 12px;
             }
             #mainTitle { font-size: 24px; font-weight: 800; }
-            #subTitle, #metaLabel, #topologyStats { color: #9aa4b2; }
+            #subTitle, #metaLabel, #topologyStats, #topologySummary { color: #c7d0dc; }
             #cardTitle, #detailTitle { font-size: 16px; font-weight: 700; }
+            #topologyTitle { font-size: 14px; font-weight: 700; color: #eef4ff; }
+            #topologyStats { font-size: 13px; line-height: 1.35em; }
+            #metaLabel, #topologySummary { font-size: 12px; }
             #metricTitle { color: #93a3b8; font-size: 11px; }
             #metricValue, #systemValue { font-size: 18px; font-weight: 700; }
-            #faultLabel { color: #f8d7da; }
+            #faultLabel { color: #f8d7da; font-size: 12px; }
             QPushButton {
                 background: #1f6feb; border: none; border-radius: 10px; padding: 9px 12px;
                 font-weight: 700;
             }
             QPushButton:hover { background: #388bfd; }
+            #componentBlock QPushButton { padding: 6px 8px; font-size: 11px; }
             QPushButton#killButton { background: #e74c3c; min-width: 160px; }
             QPushButton#killButton:hover { background: #ff6655; }
             QTextEdit {

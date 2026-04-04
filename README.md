@@ -10,12 +10,12 @@ This repo contains the drivetrain, Phidgets hardware integration, joystick teleo
 
 ## Repository Layout
 
-- [`phidgets_hardware`](/home/ahmedtabl/gui_ws/tasc_drive/phidgets_hardware): `ros2_control` hardware interface, teleop node, controller config
-- [`drive_bringup`](/home/ahmedtabl/gui_ws/tasc_drive/drive_bringup): launch files for the drive stack
-- [`drive_control`](/home/ahmedtabl/gui_ws/tasc_drive/drive_control): helper nodes such as the motor position publisher
-- [`drive_description`](/home/ahmedtabl/gui_ws/tasc_drive/drive_description): URDF/xacro and RViz configuration
-- [`rover_dashboard_pkg/rover_dashboard`](/home/ahmedtabl/gui_ws/tasc_drive/rover_dashboard_pkg/rover_dashboard): dashboard GUI and backend
-- [`rover_dashboard_pkg/esp32_relay_controller`](/home/ahmedtabl/gui_ws/tasc_drive/rover_dashboard_pkg/esp32_relay_controller): ESP32 micro-ROS relay controller sketch and bring-up notes
+- [`phidgets_hardware`](phidgets_hardware): `ros2_control` hardware interface, teleop node, controller config
+- [`drive_bringup`](drive_bringup): launch files for the drive stack
+- [`drive_control`](drive_control): helper nodes such as the motor position publisher
+- [`drive_description`](drive_description): URDF/xacro and RViz configuration
+- [`rover_dashboard_pkg/rover_dashboard`](rover_dashboard_pkg/rover_dashboard): dashboard GUI and backend
+- [`rover_dashboard_pkg/esp32_relay_controller`](rover_dashboard_pkg/esp32_relay_controller): ESP32 micro-ROS relay controller sketch and bring-up notes
 
 ## Current Capabilities
 
@@ -92,11 +92,11 @@ The ESP32 used so far is:
 
 The relay sketch is here:
 
-- [relay_controller_wifi.ino](/home/ahmedtabl/gui_ws/tasc_drive/rover_dashboard_pkg/esp32_relay_controller/relay_controller_wifi/relay_controller_wifi.ino)
+- [relay_controller_wifi.ino](rover_dashboard_pkg/esp32_relay_controller/relay_controller_wifi/relay_controller_wifi.ino)
 
 The detailed relay-controller guide is here:
 
-- [README.md](/home/ahmedtabl/gui_ws/tasc_drive/rover_dashboard_pkg/esp32_relay_controller/README.md)
+- [README.md](rover_dashboard_pkg/esp32_relay_controller/README.md)
 
 ## Important VM Networking Note
 
@@ -213,17 +213,17 @@ Current diff-drive controller geometry:
 
 Configured in:
 
-- [ros2_control_controllers.yaml](/home/ahmedtabl/gui_ws/tasc_drive/phidgets_hardware/config/ros2_control_controllers.yaml)
+- [ros2_control_controllers.yaml](phidgets_hardware/config/ros2_control_controllers.yaml)
 
 ## RViz Model
 
 The rover URDF/xacro is here:
 
-- [phidgets_giskard.urdf.xacro](/home/ahmedtabl/gui_ws/tasc_drive/drive_description/description/phidgets_giskard.urdf.xacro)
+- [phidgets_giskard.urdf.xacro](drive_description/description/phidgets_giskard.urdf.xacro)
 
 The RViz config is here:
 
-- [drive_model.rviz](/home/ahmedtabl/gui_ws/tasc_drive/drive_description/rviz/drive_model.rviz)
+- [drive_model.rviz](drive_description/rviz/drive_model.rviz)
 
 You can open RViz manually with:
 
