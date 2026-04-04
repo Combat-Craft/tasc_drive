@@ -61,6 +61,35 @@ The intended high-level data flow is:
 5. dashboard displays relay state plus motor telemetry
 6. joystick teleop sends drive commands only when all 4 motors are powered and attached
 
+## rqt Graph Overview
+
+Add the captured `rqt_graph` screenshot to the repo at:
+
+```text
+docs/rqt_graph_system.png
+```
+
+Then embed it here in the future if desired.
+
+What the graph shows at a high level:
+
+- `joint_state_broadcaster` publishes `/joint_states`, which feed `robot_state_publisher`
+- `robot_state_publisher` publishes `/robot_description` and the robot TF tree used by RViz
+- `phidgets_motor_telemetry_bridge` publishes `/rover/drive/motor_telemetry`
+- `motor_position_publisher` republishes that into `/rover/drive/motor_positions`
+- `rover_dashboard_backend` sits in the middle of the relay and GUI flow
+- the dashboard backend subscribes to `/rover/relay_board/state`, `/rover/relay_board/heartbeat`, and `/rover/drive/motor_telemetry`
+- the dashboard backend publishes `/rover/gui/telemetry` and `/rover/gui/heartbeat` for the GUI
+- the GUI publishes `/rover/gui/command`, which the backend translates into `/rover/relay_board/command`
+- `diff_drive_controller` consumes joystick-derived velocity commands on `/diff_drive_controller/cmd_vel_unstamped`
+
+This graph is useful because it shows the full end-to-end chain:
+
+1. relay power control through `/rover/relay_board/*`
+2. dashboard aggregation through `/rover/gui/*`
+3. drivetrain telemetry through `/rover/drive/*`
+4. robot-state publication through `/joint_states` and `robot_state_publisher`
+
 ## ESP32 Relay Controller
 
 The ESP32 used so far is:
