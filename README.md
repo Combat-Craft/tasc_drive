@@ -63,13 +63,7 @@ The intended high-level data flow is:
 
 ## rqt Graph Overview
 
-Add the captured `rqt_graph` screenshot to the repo at:
-
-```text
-docs/rqt_graph_system.png
-```
-
-Then embed it here in the future if desired.
+![rqt graph overview](docs/rqt_graph_system.png)
 
 What the graph shows at a high level:
 

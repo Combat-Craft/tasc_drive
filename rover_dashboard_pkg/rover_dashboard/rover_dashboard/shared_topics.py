@@ -15,4 +15,8 @@ DEFAULT_MOTORS = [
     'front_right_wheel_joint',
     'rear_right_wheel_joint',
 ]
-DEFAULT_SUBSYSTEMS = DEFAULT_MOTORS.copy()
+DEFAULT_LIGHTS = [
+    'Left Headlight',
+    'Right Headlight',
+]
+DEFAULT_SUBSYSTEMS = DEFAULT_MOTORS.copy() + DEFAULT_LIGHTS.copy()

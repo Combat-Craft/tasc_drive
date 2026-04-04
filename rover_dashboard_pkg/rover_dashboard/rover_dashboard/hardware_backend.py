@@ -9,6 +9,7 @@ from std_msgs.msg import String
 
 try:
     from .shared_topics import (
+        DEFAULT_LIGHTS,
         DEFAULT_MOTORS,
         DEFAULT_SUBSYSTEMS,
         TOPIC_GUI_COMMAND,
@@ -21,6 +22,7 @@ try:
     )
 except ImportError:
     from shared_topics import (  # type: ignore
+        DEFAULT_LIGHTS,
         DEFAULT_MOTORS,
         DEFAULT_SUBSYSTEMS,
         TOPIC_GUI_COMMAND,

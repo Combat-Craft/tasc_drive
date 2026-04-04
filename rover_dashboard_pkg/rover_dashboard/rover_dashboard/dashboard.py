@@ -19,7 +19,7 @@ except Exception:
     ROS_AVAILABLE = False
 
 from PySide6.QtCore import QObject, QProcess, Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QProgressBar,
-    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -39,6 +38,7 @@ from PySide6.QtWidgets import (
 
 try:
     from .shared_topics import (
+        DEFAULT_LIGHTS,
         DEFAULT_MOTORS,
         TOPIC_GUI_COMMAND,
         TOPIC_GUI_HEARTBEAT,
@@ -46,6 +46,7 @@ try:
     )
 except ImportError:
     from shared_topics import (  # type: ignore
+        DEFAULT_LIGHTS,
         DEFAULT_MOTORS,
         TOPIC_GUI_COMMAND,
         TOPIC_GUI_HEARTBEAT,
@@ -75,7 +76,7 @@ def humanize_joint_name(name: str) -> str:
         'front_right_wheel_joint': 'Front Right Wheel',
         'rear_right_wheel_joint': 'Rear Right Wheel',
     }
-    return mapping.get(name, name.replace('_', ' ').title())
+    return mapping.get(name, name)
 
 
 class TelemetryBridge(QObject):
@@ -124,9 +125,10 @@ class RosSpinThread(threading.Thread):
 
 
 @dataclass
-class MotorControlState:
+class ComponentState:
     name: str
     display_name: str
+    kind: str
     enabled: bool = False
     attached: bool = False
     channel: int = 0
@@ -141,6 +143,37 @@ class MotorControlState:
     motor_fault: str = 'No data'
     last_command: str = 'None'
     last_update: str = '--'
+
+    @property
+    def is_motor(self) -> bool:
+        return self.kind == 'motor'
+
+    @property
+    def status_label(self) -> str:
+        return 'ON' if self.enabled else 'OFF'
+
+
+class StatusBadge(QLabel):
+    COLORS = {
+        'healthy': '#1db954',
+        'warning': '#f0ad4e',
+        'fault': '#e74c3c',
+        'offline': '#6c757d',
+        'connected': '#1db954',
+    }
+
+    def __init__(self, text: str = 'OFFLINE', status_key: str = 'offline') -> None:
+        super().__init__(text)
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumWidth(92)
+        self.set_status(text, status_key)
+
+    def set_status(self, text: str, status_key: str) -> None:
+        color = self.COLORS.get(status_key, '#6c757d')
+        self.setText(text)
+        self.setStyleSheet(
+            f'background:{color}; color:white; border-radius:10px; padding:4px 10px; font-weight:700;'
+        )
 
 
 class MetricPill(QFrame):
@@ -160,75 +193,43 @@ class MetricPill(QFrame):
         self.value.setText(value)
 
 
-class StatusBadge(QLabel):
-    COLORS = {
-        'healthy': '#1db954',
-        'warning': '#f0ad4e',
-        'fault': '#e74c3c',
-        'offline': '#6c757d',
-        'connected': '#1db954',
-    }
-
-    def __init__(self, text: str = 'OFFLINE', status_key: str = 'offline') -> None:
-        super().__init__(text)
-        self.setAlignment(Qt.AlignCenter)
-        self.setMinimumWidth(96)
-        self.set_status(text, status_key)
-
-    def set_status(self, text: str, status_key: str) -> None:
-        color = self.COLORS.get(status_key, '#6c757d')
-        self.setText(text)
-        self.setStyleSheet(
-            f'background:{color}; color:white; border-radius:10px; padding:5px 10px; font-weight:700;'
-        )
-
-
-class MotorControlCard(QFrame):
+class TopologyComponentBlock(QFrame):
     toggled = Signal(str, bool)
     details_requested = Signal(str)
 
-    def __init__(self, motor_name: str) -> None:
+    def __init__(self, component_name: str) -> None:
         super().__init__()
-        self.motor_name = motor_name
-        self.setObjectName('motorCard')
-        self.state = MotorControlState(name=motor_name, display_name=humanize_joint_name(motor_name))
+        self.component_name = component_name
+        self.state = ComponentState(
+            name=component_name,
+            display_name=humanize_joint_name(component_name),
+            kind='motor' if component_name in DEFAULT_MOTORS else 'light',
+        )
+        self.setObjectName('componentBlock')
         self._build_ui()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 14, 14, 14)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
 
-        header = QHBoxLayout()
-        title_col = QVBoxLayout()
-        title = QLabel(self.state.display_name)
-        title.setObjectName('cardTitle')
-        subtitle = QLabel(self.motor_name)
-        subtitle.setObjectName('cardSubTitle')
-        title_col.addWidget(title)
-        title_col.addWidget(subtitle)
-        self.status_badge = StatusBadge('OFFLINE', 'offline')
-        header.addLayout(title_col)
-        header.addStretch(1)
-        header.addWidget(self.status_badge)
-        root.addLayout(header)
+        title_row = QHBoxLayout()
+        self.title = QLabel(self.state.display_name)
+        self.title.setObjectName('cardTitle')
+        self.badge = StatusBadge('OFFLINE', 'offline')
+        title_row.addWidget(self.title)
+        title_row.addStretch(1)
+        title_row.addWidget(self.badge)
+        root.addLayout(title_row)
 
-        self.metrics = {
-            'position': MetricPill('Position', '--'),
-            'velocity': MetricPill('Velocity', '--'),
-            'temperature': MetricPill('Temp', '--'),
-            'current': MetricPill('Relay Current', '--'),
-        }
-        metrics_layout = QGridLayout()
-        metrics_layout.setSpacing(10)
-        for idx, pill in enumerate(self.metrics.values()):
-            row, col = divmod(idx, 2)
-            metrics_layout.addWidget(pill, row, col)
-        root.addLayout(metrics_layout)
+        self.summary = QLabel('Power OFF')
+        self.summary.setObjectName('metaLabel')
+        root.addWidget(self.summary)
 
-        self.meta_label = QLabel('Channel -- | Bus -- V | Command None')
-        self.meta_label.setObjectName('metaLabel')
-        root.addWidget(self.meta_label)
+        self.stats = QLabel('No telemetry')
+        self.stats.setWordWrap(True)
+        self.stats.setObjectName('topologyStats')
+        root.addWidget(self.stats)
 
         self.fault_label = QLabel('Fault: No data')
         self.fault_label.setWordWrap(True)
@@ -238,115 +239,209 @@ class MotorControlCard(QFrame):
         button_row = QHBoxLayout()
         self.toggle_button = QPushButton('Power ON')
         self.toggle_button.clicked.connect(self._emit_toggle)
-        detail_button = QPushButton('Details')
-        detail_button.clicked.connect(lambda: self.details_requested.emit(self.motor_name))
+        self.detail_button = QPushButton('Details')
+        self.detail_button.clicked.connect(lambda: self.details_requested.emit(self.component_name))
         button_row.addWidget(self.toggle_button)
-        button_row.addWidget(detail_button)
+        button_row.addWidget(self.detail_button)
         root.addLayout(button_row)
 
     def _emit_toggle(self) -> None:
-        self.toggled.emit(self.motor_name, not self.state.enabled)
+        self.toggled.emit(self.component_name, not self.state.enabled)
 
-    def update_state(self, state: MotorControlState) -> None:
+    def update_state(self, state: ComponentState) -> None:
         self.state = state
-        self.metrics['position'].set_value(f'{state.position:0.3f} rad')
-        self.metrics['velocity'].set_value(f'{state.velocity:0.3f} rad/s')
-        self.metrics['temperature'].set_value(f'{state.temperature:0.1f} °C')
-        self.metrics['current'].set_value(f'{state.current:0.2f} A')
-
-        self.status_badge.set_status(state.health.upper(), state.health)
-        self.meta_label.setText(
-            f'Channel {state.channel} | Bus {state.voltage:0.1f} V | Last {state.last_command}'
+        self.title.setText(state.display_name)
+        self.badge.set_status(state.health.upper(), state.health)
+        self.summary.setText(
+            f'Power {state.status_label} | Channel {state.channel} | Bus {state.voltage:0.1f} V'
         )
+        if state.is_motor:
+            self.stats.setText(
+                f'Temp {state.temperature:0.1f} C | Vel {state.velocity:0.2f} rad/s\n'
+                f'Pos {state.position:0.2f} rad | Current {state.current:0.2f} A'
+            )
+        else:
+            self.stats.setText('Headlight telemetry pending.\nCurrent focus: relay on/off state.')
         self.fault_label.setText(f'Fault: {state.fault}')
         self.toggle_button.setText('Power OFF' if state.enabled else 'Power ON')
+
+
+class TopologyGraphView(QFrame):
+    toggled = Signal(str, bool)
+    details_requested = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName('topologyGraph')
+        self.components: Dict[str, TopologyComponentBlock] = {}
+        self.battery = QFrame(self)
+        self.battery.setObjectName('systemBlock')
+        self.battery_label = QLabel('Battery', self.battery)
+        self.battery_value = QLabel('-- V', self.battery)
+        self.battery_value.setObjectName('systemValue')
+
+        self.bus = QFrame(self)
+        self.bus.setObjectName('systemBlock')
+        self.bus_label = QLabel('Relay Bus', self.bus)
+        self.bus_value = QLabel('-- A', self.bus)
+        self.bus_value.setObjectName('systemValue')
+
+    def ensure_components(self, component_names) -> None:
+        for name in component_names:
+            if name in self.components:
+                continue
+            block = TopologyComponentBlock(name)
+            block.setParent(self)
+            block.toggled.connect(self.toggled.emit)
+            block.details_requested.connect(self.details_requested.emit)
+            self.components[name] = block
+            block.show()
+        self._layout_children()
+
+    def update_summary(self, battery_voltage: float, total_current: float) -> None:
+        self.battery_value.setText(f'{battery_voltage:0.2f} V')
+        self.bus_value.setText(f'{total_current:0.2f} A')
+
+    def update_component_state(self, state: ComponentState) -> None:
+        self.ensure_components([state.name])
+        self.components[state.name].update_state(state)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._layout_children()
+
+    def _layout_children(self) -> None:
+        width = self.width()
+        height = self.height()
+        if width <= 0 or height <= 0:
+            return
+
+        battery_rect = self._rect(width * 0.39, height * 0.03, width * 0.22, height * 0.10)
+        bus_rect = self._rect(width * 0.36, height * 0.20, width * 0.28, height * 0.12)
+        self.battery.setGeometry(*battery_rect)
+        self.bus.setGeometry(*bus_rect)
+        self._layout_system_block(self.battery, self.battery_label, self.battery_value)
+        self._layout_system_block(self.bus, self.bus_label, self.bus_value)
+
+        positions = {
+            'Left Headlight': self._rect(width * 0.05, height * 0.08, width * 0.22, height * 0.20),
+            'Right Headlight': self._rect(width * 0.73, height * 0.08, width * 0.22, height * 0.20),
+            'front_left_wheel_joint': self._rect(width * 0.03, height * 0.40, width * 0.28, height * 0.22),
+            'front_right_wheel_joint': self._rect(width * 0.69, height * 0.40, width * 0.28, height * 0.22),
+            'rear_left_wheel_joint': self._rect(width * 0.03, height * 0.70, width * 0.28, height * 0.22),
+            'rear_right_wheel_joint': self._rect(width * 0.69, height * 0.70, width * 0.28, height * 0.22),
+        }
+
+        for name, block in self.components.items():
+            rect = positions.get(name, self._rect(width * 0.34, height * 0.62, width * 0.30, height * 0.20))
+            block.setGeometry(*rect)
+
+    def _layout_system_block(self, frame: QFrame, title: QLabel, value: QLabel) -> None:
+        title.setGeometry(10, 8, frame.width() - 20, 22)
+        value.setGeometry(10, 34, frame.width() - 20, 28)
+
+    def _rect(self, x: float, y: float, w: float, h: float):
+        return int(x), int(y), int(w), int(h)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor('#4e6278'))
+        pen.setWidth(3)
+        painter.setPen(pen)
+
+        battery_center = self.battery.geometry().center()
+        bus_center = self.bus.geometry().center()
+        painter.drawLine(battery_center, bus_center)
+
+        for name, block in self.components.items():
+            center = block.geometry().center()
+            painter.drawLine(bus_center, center)
 
 
 class UrdfVisualLauncher(QFrame):
     def __init__(self) -> None:
         super().__init__()
-        self.setObjectName('driveVisual')
-        self.setMinimumHeight(280)
-        self.process: Optional[QProcess] = None
+        self.setObjectName('sideCard')
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
-
-        title = QLabel('Actual URDF 3D View')
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+        title = QLabel('3D View')
         title.setObjectName('cardTitle')
-        description = QLabel(
-            'This dashboard now uses RViz for the real 3D robot model view.\n'
-            'Start the drive stack, then open RViz to see the live URDF driven by joint states.'
-        )
-        description.setWordWrap(True)
+        description = QLabel('Open the real RViz URDF view.')
         description.setObjectName('metaLabel')
         self.status_label = QLabel('RViz status: not launched')
         self.status_label.setObjectName('metaLabel')
-        self.open_button = QPushButton('Open 3D URDF View In RViz')
+        self.open_button = QPushButton('Open RViz')
         self.open_button.clicked.connect(self.launch_rviz)
-
         layout.addWidget(title)
         layout.addWidget(description)
-        layout.addStretch(1)
         layout.addWidget(self.status_label)
         layout.addWidget(self.open_button)
 
     def launch_rviz(self) -> None:
         if get_package_share_directory is None:
-            self.status_label.setText('RViz status: ament index unavailable in this environment')
+            self.status_label.setText('RViz status: ament index unavailable')
             return
-
         try:
             description_share = get_package_share_directory('drive_description')
         except Exception as exc:
-            self.status_label.setText(f'RViz status: could not find drive_description ({exc})')
+            self.status_label.setText(f'RViz status: drive_description missing ({exc})')
             return
-
         rviz_config = os.path.join(description_share, 'rviz', 'drive_model.rviz')
-        if not os.path.exists(rviz_config):
-            self.status_label.setText(f'RViz status: config missing at {rviz_config}')
-            return
-
         launched = QProcess.startDetached('rviz2', ['-d', rviz_config])
-        self.status_label.setText(
-            'RViz status: launched' if launched else 'RViz status: failed to launch rviz2'
-        )
+        self.status_label.setText('RViz status: launched' if launched else 'RViz status: launch failed')
 
 
 class DetailPanel(QGroupBox):
     def __init__(self) -> None:
-        super().__init__('Motor Details')
+        super().__init__('Component Details')
         layout = QVBoxLayout(self)
-        self.title = QLabel('Select a motor card')
+        self.title = QLabel('Select a component')
         self.title.setObjectName('detailTitle')
         self.info = QTextEdit()
         self.info.setReadOnly(True)
-        self.info.setMinimumHeight(260)
+        self.info.setMinimumHeight(240)
         layout.addWidget(self.title)
         layout.addWidget(self.info)
 
-    def render_motor(self, state: MotorControlState) -> None:
+    def render_component(self, state: ComponentState) -> None:
         self.title.setText(state.display_name)
-        self.info.setPlainText(
-            f'Joint name: {state.name}\n'
-            f'Powered: {state.enabled}\n'
-            f'Attached: {state.attached}\n'
-            f'Relay channel: {state.channel}\n'
-            f'Bus voltage: {state.voltage:0.2f} V\n'
-            f'Relay current: {state.current:0.2f} A\n'
-            f'Position: {state.position:0.4f} rad\n'
-            f'Velocity: {state.velocity:0.4f} rad/s\n'
-            f'Temperature: {state.temperature:0.1f} °C\n'
-            f'Health: {state.health}\n'
-            f'Combined fault: {state.fault}\n'
-            f'Relay fault: {state.relay_fault}\n'
-            f'Motor fault: {state.motor_fault}\n'
-            f'Last command: {state.last_command}\n'
-            f'Last motor update: {state.last_update}\n'
-        )
+        if state.is_motor:
+            text = (
+                f'Type: Motor\n'
+                f'Joint name: {state.name}\n'
+                f'Powered: {state.enabled}\n'
+                f'Attached: {state.attached}\n'
+                f'Relay channel: {state.channel}\n'
+                f'Bus voltage: {state.voltage:0.2f} V\n'
+                f'Relay current: {state.current:0.2f} A\n'
+                f'Position: {state.position:0.4f} rad\n'
+                f'Velocity: {state.velocity:0.4f} rad/s\n'
+                f'Temperature: {state.temperature:0.1f} C\n'
+                f'Health: {state.health}\n'
+                f'Fault: {state.fault}\n'
+                f'Relay fault: {state.relay_fault}\n'
+                f'Motor fault: {state.motor_fault}\n'
+                f'Last command: {state.last_command}\n'
+                f'Last motor update: {state.last_update}\n'
+            )
+        else:
+            text = (
+                f'Type: Headlight\n'
+                f'Name: {state.name}\n'
+                f'Powered: {state.enabled}\n'
+                f'Relay channel: {state.channel}\n'
+                f'Bus voltage: {state.voltage:0.2f} V\n'
+                f'Health: {state.health}\n'
+                f'Fault: {state.fault}\n'
+                f'Last command: {state.last_command}\n'
+            )
+        self.info.setPlainText(text)
 
 
 class HeaderBar(QFrame):
@@ -359,9 +454,9 @@ class HeaderBar(QFrame):
         layout.setContentsMargins(12, 10, 12, 10)
 
         title_col = QVBoxLayout()
-        title = QLabel('Rover Motor Power & Telemetry Dashboard')
+        title = QLabel('Rover Topology & Power Dashboard')
         title.setObjectName('mainTitle')
-        subtitle = QLabel('Power switching and live wheel telemetry in one view')
+        subtitle = QLabel('Motor and headlight controls with inline telemetry')
         subtitle.setObjectName('subTitle')
         title_col.addWidget(title)
         title_col.addWidget(subtitle)
@@ -426,7 +521,7 @@ class DashboardWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle('Rover Dashboard')
-        self.resize(1600, 980)
+        self.resize(1680, 980)
         self.bridge = TelemetryBridge()
         self.bridge.telemetry_received.connect(self.on_telemetry)
         self.bridge.heartbeat_received.connect(self.on_heartbeat)
@@ -443,16 +538,17 @@ class DashboardWindow(QMainWindow):
         self.current_selected: Optional[str] = None
         self.latest_payload = {}
 
-        self.motor_cards: Dict[str, MotorControlCard] = {}
-        self.motor_states: Dict[str, MotorControlState] = {
-            name: MotorControlState(name=name, display_name=humanize_joint_name(name))
+        self.component_states: Dict[str, ComponentState] = {
+            name: ComponentState(name=name, display_name=humanize_joint_name(name), kind='motor')
             for name in DEFAULT_MOTORS
         }
+        for name in DEFAULT_LIGHTS:
+            self.component_states[name] = ComponentState(name=name, display_name=name, kind='light')
 
         self._build_ui()
         self._apply_styles()
         self._setup_ros_or_demo()
-        self._ensure_motor_cards(DEFAULT_MOTORS)
+        self.topology.ensure_components(list(self.component_states.keys()))
         self._update_elapsed_label()
 
     def _build_ui(self) -> None:
@@ -468,54 +564,34 @@ class DashboardWindow(QMainWindow):
         self.summary = SummaryStrip()
         root.addWidget(self.summary)
 
-        main_grid = QGridLayout()
-        main_grid.setSpacing(12)
-        root.addLayout(main_grid, 1)
+        content = QGridLayout()
+        content.setSpacing(12)
+        root.addLayout(content, 1)
 
-        visual_box = QGroupBox('Drive Visual')
-        visual_layout = QVBoxLayout(visual_box)
-        self.rover_visual = UrdfVisualLauncher()
-        visual_layout.addWidget(self.rover_visual)
-        main_grid.addWidget(visual_box, 0, 0, 1, 2)
+        topology_box = QGroupBox('Rover Topology')
+        topology_layout = QVBoxLayout(topology_box)
+        self.topology = TopologyGraphView()
+        self.topology.toggled.connect(self.on_toggle_component)
+        self.topology.details_requested.connect(self.on_show_details)
+        topology_layout.addWidget(self.topology)
+        content.addWidget(topology_box, 0, 0, 2, 1)
 
-        control_box = QGroupBox('Motor Power & Telemetry')
-        control_layout = QVBoxLayout(control_box)
-        control_scroll = QScrollArea()
-        control_scroll.setWidgetResizable(True)
-        control_host = QWidget()
-        self.motor_grid = QGridLayout(control_host)
-        self.motor_grid.setSpacing(12)
-        control_scroll.setWidget(control_host)
-        control_layout.addWidget(control_scroll)
-        main_grid.addWidget(control_box, 1, 0, 1, 2)
+        self.rviz_panel = UrdfVisualLauncher()
+        content.addWidget(self.rviz_panel, 0, 1)
 
         self.detail_panel = DetailPanel()
-        main_grid.addWidget(self.detail_panel, 0, 2)
+        content.addWidget(self.detail_panel, 1, 1)
 
         self.log_panel = LogPanel()
-        main_grid.addWidget(self.log_panel, 1, 2)
+        content.addWidget(self.log_panel, 2, 0, 1, 2)
 
-        main_grid.setColumnStretch(0, 2)
-        main_grid.setColumnStretch(1, 2)
-        main_grid.setColumnStretch(2, 1)
-        main_grid.setRowStretch(1, 1)
+        content.setColumnStretch(0, 3)
+        content.setColumnStretch(1, 1)
+        content.setRowStretch(0, 0)
+        content.setRowStretch(1, 1)
+        content.setRowStretch(2, 1)
 
         self.setCentralWidget(central)
-
-    def _ensure_motor_cards(self, names) -> None:
-        for name in names:
-            if name in self.motor_cards:
-                continue
-            card = MotorControlCard(name)
-            card.toggled.connect(self.on_toggle_motor)
-            card.details_requested.connect(self.on_show_motor_details)
-            self.motor_cards[name] = card
-            self.motor_states.setdefault(
-                name,
-                MotorControlState(name=name, display_name=humanize_joint_name(name)),
-            )
-            row, col = divmod(len(self.motor_cards) - 1, 2)
-            self.motor_grid.addWidget(card, row, col)
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
@@ -526,24 +602,26 @@ class DashboardWindow(QMainWindow):
                 border: 1px solid #263241; border-radius: 12px; margin-top: 12px;
                 font-weight: 700; padding-top: 12px; background: #111827;
             }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px 0 4px; }
-            #headerBar, #summaryStrip, #motorCard, #driveVisual, #metricPill {
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 4px; }
+            #headerBar, #summaryStrip, #componentBlock, #topologyGraph, #metricPill, #sideCard, #systemBlock {
                 background: #111827; border: 1px solid #263241; border-radius: 12px;
             }
             #mainTitle { font-size: 24px; font-weight: 800; }
-            #subTitle, #cardSubTitle, #metaLabel { color: #9aa4b2; }
+            #subTitle, #metaLabel, #topologyStats { color: #9aa4b2; }
             #cardTitle, #detailTitle { font-size: 16px; font-weight: 700; }
             #metricTitle { color: #93a3b8; font-size: 11px; }
-            #metricValue { font-size: 18px; font-weight: 700; }
+            #metricValue, #systemValue { font-size: 18px; font-weight: 700; }
             #faultLabel { color: #f8d7da; }
             QPushButton {
-                background: #1f6feb; border: none; border-radius: 10px; padding: 10px 12px;
+                background: #1f6feb; border: none; border-radius: 10px; padding: 9px 12px;
                 font-weight: 700;
             }
             QPushButton:hover { background: #388bfd; }
             QPushButton#killButton { background: #e74c3c; min-width: 160px; }
             QPushButton#killButton:hover { background: #ff6655; }
-            QTextEdit, QScrollArea { background: #0b1220; border: 1px solid #263241; border-radius: 10px; }
+            QTextEdit {
+                background: #0b1220; border: 1px solid #263241; border-radius: 10px;
+            }
             QProgressBar {
                 background: #0b1220; border: 1px solid #263241; border-radius: 8px; text-align: center;
                 min-height: 24px;
@@ -559,7 +637,7 @@ class DashboardWindow(QMainWindow):
                 self.ros_node = RosDashboardNode(self.bridge)
                 self.spin_thread = RosSpinThread(self.ros_node)
                 self.spin_thread.start()
-                self.log_panel.add_entry('ROS 2 initialized. Waiting for motor power and telemetry...')
+                self.log_panel.add_entry('ROS 2 initialized. Waiting for topology telemetry...')
                 return
             except Exception as exc:
                 self.log_panel.add_entry(f'ROS 2 unavailable, starting demo mode: {exc}')
@@ -568,7 +646,7 @@ class DashboardWindow(QMainWindow):
         self.demo_timer = QTimer(self)
         self.demo_timer.timeout.connect(self._emit_demo_payload)
         self.demo_timer.start(500)
-        self.log_panel.add_entry('Running internal motor dashboard demo mode.')
+        self.log_panel.add_entry('Running internal dashboard demo mode.')
 
     def _emit_demo_payload(self) -> None:
         t = datetime.now().timestamp()
@@ -592,66 +670,80 @@ class DashboardWindow(QMainWindow):
         self.latest_payload = payload
         relays = payload.get('subsystems', {})
         motors = payload.get('motors', {})
-        all_motor_names = list(dict.fromkeys(list(motors.keys()) + list(relays.keys()) + list(DEFAULT_MOTORS)))
-        self._ensure_motor_cards(all_motor_names)
+        component_names = list(dict.fromkeys(list(relays.keys()) + list(motors.keys()) + list(self.component_states.keys())))
+        self.topology.ensure_components(component_names)
 
         fault_count = 0
         motors_online = 0
 
-        for name in all_motor_names:
+        for name in component_names:
             relay_data = relays.get(name, {})
             motor_data = motors.get(name, {})
-            state = self.motor_states.get(
+            state = self.component_states.get(
                 name,
-                MotorControlState(name=name, display_name=humanize_joint_name(name)),
+                ComponentState(
+                    name=name,
+                    display_name=humanize_joint_name(name),
+                    kind='motor' if name in DEFAULT_MOTORS else 'light',
+                ),
             )
 
             state.enabled = bool(relay_data.get('enabled', state.enabled))
             state.channel = int(relay_data.get('channel', state.channel))
             state.voltage = float(relay_data.get('voltage', state.voltage))
             state.current = float(relay_data.get('current', state.current))
-            state.position = float(motor_data.get('position', state.position))
-            state.velocity = float(motor_data.get('velocity', state.velocity))
-            state.temperature = float(motor_data.get('temperature', state.temperature))
-            state.attached = bool(motor_data.get('attached', state.attached))
             state.last_command = relay_data.get('last_command', state.last_command)
-            state.last_update = motor_data.get('last_update', state.last_update)
             state.relay_fault = relay_data.get('fault', 'Relay telemetry unavailable')
-            state.motor_fault = motor_data.get('fault', 'Motor telemetry unavailable')
 
-            relay_health = relay_data.get('health', 'offline' if not state.enabled else 'healthy')
-            motor_health = motor_data.get('health', 'offline' if not state.attached else 'healthy')
+            if state.is_motor:
+                state.position = float(motor_data.get('position', state.position))
+                state.velocity = float(motor_data.get('velocity', state.velocity))
+                state.temperature = float(motor_data.get('temperature', state.temperature))
+                state.attached = bool(motor_data.get('attached', state.attached))
+                state.last_update = motor_data.get('last_update', state.last_update)
+                state.motor_fault = motor_data.get('fault', 'Motor telemetry unavailable')
+                relay_health = relay_data.get('health', 'offline' if not state.enabled else 'healthy')
+                motor_health = motor_data.get('health', 'offline' if not state.attached else 'healthy')
 
-            if relay_health == 'fault' or motor_health == 'fault':
-                state.health = 'fault'
-            elif relay_health == 'warning' or motor_health == 'warning':
-                state.health = 'warning'
-            elif state.enabled and state.attached:
-                state.health = 'healthy'
-            elif state.enabled or state.attached:
-                state.health = 'warning'
-            else:
-                state.health = 'offline'
-
-            fault_parts = []
-            if state.relay_fault not in {'None', 'Not energized', 'Relay telemetry unavailable'}:
-                fault_parts.append(state.relay_fault)
-            if state.motor_fault not in {'None', 'Motor telemetry unavailable'}:
-                fault_parts.append(state.motor_fault)
-            if not fault_parts:
-                if not state.enabled:
-                    fault_parts.append('Power path is off')
-                elif not state.attached:
-                    fault_parts.append('Motor controller not attached')
+                if relay_health == 'fault' or motor_health == 'fault':
+                    state.health = 'fault'
+                elif relay_health == 'warning' or motor_health == 'warning':
+                    state.health = 'warning'
+                elif state.enabled and state.attached:
+                    state.health = 'healthy'
+                elif state.enabled or state.attached:
+                    state.health = 'warning'
                 else:
-                    fault_parts.append('None')
-            state.fault = ' | '.join(fault_parts)
+                    state.health = 'offline'
 
-            self.motor_states[name] = state
-            self.motor_cards[name].update_state(state)
+                fault_parts = []
+                if state.relay_fault not in {'None', 'Not energized', 'Relay telemetry unavailable'}:
+                    fault_parts.append(state.relay_fault)
+                if state.motor_fault not in {'None', 'Motor telemetry unavailable'}:
+                    fault_parts.append(state.motor_fault)
+                if not fault_parts:
+                    if not state.enabled:
+                        fault_parts.append('Power path is off')
+                    elif not state.attached:
+                        fault_parts.append('Motor controller not attached')
+                    else:
+                        fault_parts.append('None')
+                state.fault = ' | '.join(fault_parts)
 
-            if state.attached:
-                motors_online += 1
+                if state.attached:
+                    motors_online += 1
+            else:
+                state.attached = state.enabled
+                state.temperature = 0.0
+                state.position = 0.0
+                state.velocity = 0.0
+                state.motor_fault = 'N/A'
+                relay_health = relay_data.get('health', 'offline' if not state.enabled else 'healthy')
+                state.health = relay_health
+                state.fault = relay_data.get('fault', 'Headlight control ready')
+
+            self.component_states[name] = state
+            self.topology.update_component_state(state)
             if state.health == 'fault':
                 fault_count += 1
 
@@ -659,14 +751,15 @@ class DashboardWindow(QMainWindow):
         battery = float(bus.get('battery_voltage', 0.0))
         total_current = float(bus.get('total_current', 0.0))
         self.summary.update_summary(battery, total_current, motors_online, fault_count)
+        self.topology.update_summary(battery, total_current)
+
         mode = payload.get('meta', {}).get('mode', 'SAFE')
-        mode_key = 'healthy' if mode == 'ARMED' else 'warning'
-        self.header.mode_badge.set_status(mode, mode_key)
+        self.header.mode_badge.set_status(mode, 'healthy' if mode == 'ARMED' else 'warning')
 
-        if self.current_selected and self.current_selected in self.motor_states:
-            self.detail_panel.render_motor(self.motor_states[self.current_selected])
+        if self.current_selected and self.current_selected in self.component_states:
+            self.detail_panel.render_component(self.component_states[self.current_selected])
 
-    def on_toggle_motor(self, name: str, enable: bool) -> None:
+    def on_toggle_component(self, name: str, enable: bool) -> None:
         command = {
             'type': 'set_power',
             'target': name,
@@ -674,30 +767,29 @@ class DashboardWindow(QMainWindow):
             'timestamp': datetime.now().isoformat(),
         }
         self.log_panel.add_entry(f"Command sent: {'ENABLE' if enable else 'DISABLE'} {humanize_joint_name(name)}")
-        if name in self.motor_states:
-            self.motor_states[name].last_command = (
+        if name in self.component_states:
+            self.component_states[name].last_command = (
                 f"{'ENABLE' if enable else 'DISABLE'} @ {datetime.now().strftime('%H:%M:%S')}"
             )
         if self.ros_node:
             self.ros_node.send_command(command)
 
-    def on_show_motor_details(self, name: str) -> None:
+    def on_show_details(self, name: str) -> None:
         self.current_selected = name
-        if name in self.motor_states:
-            self.detail_panel.render_motor(self.motor_states[name])
+        if name in self.component_states:
+            self.detail_panel.render_component(self.component_states[name])
             self.log_panel.add_entry(f'Detail view opened for {humanize_joint_name(name)}')
 
     def on_kill_requested(self) -> None:
         confirm = QMessageBox.question(
             self,
             'Confirm software kill',
-            'Send a software kill command to disable motor power relays?',
+            'Send a software kill command to disable controllable loads?',
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
         if confirm != QMessageBox.Yes:
             return
-
         command = {
             'type': 'software_kill',
             'target': 'all',
@@ -730,7 +822,7 @@ def build_fake_payload(t: float) -> Dict:
         },
         'bus': {
             'battery_voltage': battery_voltage,
-            'total_current': 3.6 + 0.8 * math.sin(t / 4.0),
+            'total_current': 3.8 + 0.8 * math.sin(t / 4.0),
         },
         'subsystems': {},
         'motors': {},
@@ -753,11 +845,26 @@ def build_fake_payload(t: float) -> Dict:
             'position': math.sin(t / (idx + 2)) * 2.0,
             'velocity': math.cos(t / (idx + 2)) * 3.0,
             'temperature': 34.0 + idx * 1.8 + 1.5 * math.sin(t / 6.0),
-            'attached': True,
-            'health': 'healthy',
-            'fault': 'None',
+            'attached': enabled,
+            'health': 'healthy' if enabled else 'offline',
+            'fault': 'None' if enabled else 'Motor not attached',
             'last_update': datetime.now().strftime('%H:%M:%S'),
         }
+
+    for index, name in enumerate(DEFAULT_LIGHTS, start=4):
+        enabled = int(t) % (index + 3) > 2
+        payload['subsystems'][name] = {
+            'state': 'ON' if enabled else 'OFF',
+            'enabled': enabled,
+            'channel': index,
+            'voltage': 12.0 if enabled else 0.0,
+            'current': 0.1 if enabled else 0.0,
+            'temperature': 0.0,
+            'health': 'healthy' if enabled else 'offline',
+            'fault': 'None' if enabled else 'Light is off',
+            'last_command': 'AUTO DEMO',
+        }
+
     return payload
 
 
