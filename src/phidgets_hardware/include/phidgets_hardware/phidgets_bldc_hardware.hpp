@@ -42,6 +42,7 @@ private:
   std::vector<double> direction_sign_;
   std::vector<std::string> joint_names_;
   std::vector<bool> is_left_wheel_;
+  std::vector<bool> is_middle_wheel_;
 
   // Motor state tracking
   std::vector<bool> motor_enabled_;
@@ -66,6 +67,8 @@ private:
   double gear_ratio_{106.0};
   int commutations_per_motor_rev_{24};
   double rescale_factor_rot_{1.0};
+  double corner_steering_scale_{1.0};
+  double middle_steering_scale_{0.55};
 
   // ROS Communication
   rclcpp::Node::SharedPtr telemetry_node_;
@@ -87,6 +90,9 @@ private:
   void try_attach_motor(int i);
   void try_attach_temperature_sensor(int i);
   bool is_left_wheel_joint(const std::string& joint_name);
+  bool is_middle_wheel_joint(const std::string& joint_name);
+  bool both_middle_wheels_attached() const;
+  double axle_weighted_command(size_t i, double left, double right) const;
 };
 
 }  // namespace phidgets_hardware

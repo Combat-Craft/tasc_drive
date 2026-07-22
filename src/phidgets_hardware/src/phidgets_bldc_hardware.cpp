@@ -24,6 +24,8 @@ PhidgetsBldcHardware::on_init(const hardware_interface::HardwareInfo & info)
   acceleration_ = std::stod(get_param("acceleration", "5.0"));
   stall_velocity_ = std::stod(get_param("stall_velocity", "0.0"));
   command_limit_ = std::stod(get_param("command_limit", "1.0"));
+  corner_steering_scale_ = clamp(std::stod(get_param("corner_steering_scale", "1.0")), 0.0, 1.0);
+  middle_steering_scale_ = clamp(std::stod(get_param("middle_steering_scale", "0.55")), 0.0, 1.0);
 
   rescale_factor_rot_ = 1.0 / (gear_ratio_ * static_cast<double>(commutations_per_motor_rev_));
 
@@ -38,6 +40,7 @@ PhidgetsBldcHardware::on_init(const hardware_interface::HardwareInfo & info)
     
     joint_names_.push_back(name);
     is_left_wheel_.push_back(is_left_wheel_joint(name));
+    is_middle_wheel_.push_back(is_middle_wheel_joint(name));
     
     // Map based on naming convention
     if (name.find("front_left") != std::string::npos) {
@@ -113,6 +116,44 @@ PhidgetsBldcHardware::on_init(const hardware_interface::HardwareInfo & info)
 bool PhidgetsBldcHardware::is_left_wheel_joint(const std::string& joint_name)
 {
   return joint_name.find("left") != std::string::npos;
+}
+
+bool PhidgetsBldcHardware::is_middle_wheel_joint(const std::string& joint_name)
+{
+  return joint_name.find("middle") != std::string::npos;
+}
+
+bool PhidgetsBldcHardware::both_middle_wheels_attached() const
+{
+  bool left_middle_attached = false;
+  bool right_middle_attached = false;
+
+  for (size_t i = 0; i < joint_names_.size(); i++) {
+    if (!is_middle_wheel_[i] || !motor_enabled_[i] || !attached_[i]) {
+      continue;
+    }
+
+    if (is_left_wheel_[i]) {
+      left_middle_attached = true;
+    } else {
+      right_middle_attached = true;
+    }
+  }
+
+  return left_middle_attached && right_middle_attached;
+}
+
+double PhidgetsBldcHardware::axle_weighted_command(size_t i, double left, double right) const
+{
+  const double throttle_component = (left + right) / 2.0;
+  const double steering_component = (left - right) / 2.0;
+  const double steering_scale = is_middle_wheel_[i] ? middle_steering_scale_ : corner_steering_scale_;
+  const double weighted_steering = steering_component * steering_scale;
+
+  if (is_left_wheel_[i]) {
+    return throttle_component + weighted_steering;
+  }
+  return throttle_component - weighted_steering;
 }
 
 void PhidgetsBldcHardware::setup_ros_communication()
@@ -346,12 +387,15 @@ PhidgetsBldcHardware::write(const rclcpp::Time &, const rclcpp::Duration &)
   
   double left_target = (left_count > 0) ? left_sum / left_count : 0.0;
   double right_target = (right_count > 0) ? right_sum / right_count : 0.0;
+  const bool distribute_by_axle = both_middle_wheels_attached();
   
   // Send commands to enabled motors
   for (size_t i = 0; i < joint_names_.size(); i++) {
     if (!motor_enabled_[i] || !attached_[i] || !motors_[i]) continue;
     
-    double target = is_left_wheel_[i] ? left_target : right_target;
+    const double target = distribute_by_axle ?
+      axle_weighted_command(i, left_target, right_target) :
+      (is_left_wheel_[i] ? left_target : right_target);
     const double duty = clamp(target * direction_sign_[i], -command_limit_, command_limit_);
     
     if (PhidgetBLDCMotor_setTargetVelocity(motors_[i], duty) != EPHIDGET_OK) {

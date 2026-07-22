@@ -148,6 +148,8 @@
       <param name="commutations_per_motor_rev">24</param>
       <param name="command_limit">1.0</param>
       <param name="attachment_retry_period_sec">1.0</param>
+      <param name="corner_steering_scale">1.0</param>
+      <param name="middle_steering_scale">0.55</param>
     </hardware>
 
     <!-- LEFT SIDE - ALL 3 WHEELS -->

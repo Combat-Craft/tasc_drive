@@ -61,6 +61,12 @@ The system integrates relay-controlled motor power, Phidgets BLDC telemetry,
 `ros2_control`, joystick teleop, RViz model publication, and the PyQt rover
 dashboard.
 
+Steering commands are distributed by axle in the Phidgets hardware interface:
+straight forward/reverse throttle remains equal across all six wheels, while
+turning keeps full steering authority on the four corner wheels and reduces
+the steering component on the two middle wheels. The default scales are
+configured in [`src/drive_description/description/phidgets_giskard.urdf.xacro`](src/drive_description/description/phidgets_giskard.urdf.xacro).
+
 The relay controller sketch is here:
 
 - [`relay_controller_wifi.ino`](extras/esp32_relay_controller/relay_controller_wifi/relay_controller_wifi.ino)
