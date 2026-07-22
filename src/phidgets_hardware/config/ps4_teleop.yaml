@@ -1,0 +1,25 @@
+ps4_teleop:
+  ros__parameters:
+    # Joystick axis mappings
+    axis_linear_x: 1       
+    axis_angular_z: 3      
+    
+  
+    deadzone: 0.18       
+    expo: 1.8          
+    
+    # Speed scaling factors
+    speed_scale_normal: 0.5  
+    speed_scale_turbo: 1.0    
+    turn_scale_normal: 0.5  
+    turn_scale_turbo: 1.0    
+    
+    # Maximum velocities
+    max_linear: 0.0925     
+    max_angular: 0.474     
+    
+    # Turbo activation (supports BOTH button AND axis)
+    turbo_button: 6       
+    turbo_axis: 2        
+    turbo_threshold: -0.5  
+    
