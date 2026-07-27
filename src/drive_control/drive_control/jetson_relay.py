@@ -90,6 +90,8 @@ class JetsonRelayNode(Node):
         self.heartbeat_timer = self.create_timer(1.0, self.publish_heartbeat)
 
         self.get_logger().info("Jetson Relay Node Started - Ready to receive commands!")
+        self._auto_sent = False
+        self.create_timer(3.0, self.auto_turn_on_once)
 
     def set_relay(self, name: str, enabled: bool):
         if name not in RELAY_PINS:
@@ -107,6 +109,23 @@ class JetsonRelayNode(Node):
 
         self.relay_states[name] = enabled
         return True
+
+
+    def auto_turn_on_once(self):
+        if self._auto_sent:
+            return
+
+        self.get_logger().warn("AUTO: Turning ON all relays (motors enabled)")
+
+        for name in CONFIGURED_RELAYS:
+            self.set_relay(name, False)  # False = relay OFF = motors ON
+
+        self._auto_sent = True
+
+
+
+
+
 
     def command_callback(self, msg: String):
         try:
