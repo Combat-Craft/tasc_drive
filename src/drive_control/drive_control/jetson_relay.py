@@ -13,7 +13,7 @@ RELAY_PINS = {
     'rear_left_wheel_joint': 31,
     'front_right_wheel_joint': 29,
     'middle_right_wheel_joint': 15,
-    'rear_right_wheel_joint': 7,
+    'rear_right_wheel_joint': 26,
 }
 
 # Which relays are actually configured

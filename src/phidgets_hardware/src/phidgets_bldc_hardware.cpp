@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <sstream>
 #include <pluginlib/class_list_macros.hpp>
+#include <nlohmann/json.hpp> 
 
 namespace phidgets_hardware
 {
@@ -156,14 +157,7 @@ double PhidgetsBldcHardware::axle_weighted_command(size_t i, double left, double
   return throttle_component - weighted_steering;
 }
 
-void PhidgetsBldcHardware::setup_ros_communication()
-{
-  telemetry_node_ = rclcpp::Node::make_shared("phidgets_bldc_hardware");
-  
-  // Publisher that matches your dashboard's expected topic
-  motor_telemetry_pub_ = telemetry_node_->create_publisher<std_msgs::msg::String>(
-    "/rover/drive/motor_telemetry", 10);
-}
+
 
 void PhidgetsBldcHardware::connect_all_motors()
 {
@@ -188,27 +182,163 @@ void PhidgetsBldcHardware::connect_all_motors()
   }
 }
 
+void PhidgetsBldcHardware::reconnect_all_motors()
+{
+  RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"),
+              "FULL MOTOR REINITIALIZATION (same as boot)");
+
+  for (size_t i = 0; i < joint_names_.size(); i++) {
+    // FULL RESET (this is what you were missing)
+    close_phidget(i);
+    close_temperature_sensor(i);
+
+    motors_[i] = nullptr;
+    temperature_sensors_[i] = nullptr;
+
+    attached_[i] = false;
+    temperature_attached_[i] = false;
+    motor_enabled_[i] = false;
+
+    pos_rad_[i] = 0.0;
+    vel_state_[i] = 0.0;
+    cmd_[i] = 0.0;
+
+    // CRITICAL: allow reconnect
+    connection_attempted_[i] = false;
+  }
+
+  // EXACT SAME AS BOOT
+  connect_all_motors();
+}
+
+void PhidgetsBldcHardware::setup_ros_communication()
+{
+  telemetry_node_ = rclcpp::Node::make_shared("phidgets_bldc_hardware");
+
+  motor_telemetry_pub_ =
+    telemetry_node_->create_publisher<std_msgs::msg::String>(
+      "/rover/drive/motor_telemetry", 10);
+
+
+  kill_sub_ =
+    telemetry_node_->create_subscription<std_msgs::msg::String>(
+      "/rover/relay_board/command",
+      10,
+      [this](const std_msgs::msg::String::SharedPtr msg)
+      {
+        this->software_kill_callback(msg);
+      });
+
+
+  telemetry_executor_ =
+    std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+
+  telemetry_executor_->add_node(telemetry_node_);
+
+
+  telemetry_thread_ = std::thread([this]()
+  {
+    telemetry_executor_->spin();
+  });
+
+
+  RCLCPP_INFO(
+    rclcpp::get_logger("PhidgetsBldcHardware"),
+    "ROS communication started");
+}
+
+
+void PhidgetsBldcHardware::software_kill_callback(const std_msgs::msg::String::SharedPtr msg)
+{
+  try {
+    auto cmd = nlohmann::json::parse(msg->data);
+    std::string cmd_type = cmd["type"];
+    
+    if (cmd_type == "software_kill") {
+      software_kill_active_ = true;
+
+      RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"), 
+                  "SOFTWARE KILL - Disabling all motors");
+      
+      for (size_t i = 0; i < joint_names_.size(); i++) {
+        if (motor_enabled_[i]) {
+          disable_motor(i, "Software kill activated");
+        }
+      }
+    }
+    else if (cmd_type == "turn_on_all") {
+      software_kill_active_ = false;
+
+      RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"), 
+                  "TURN ON ALL - Reconnecting all motors");
+
+      reconnect_all_motors();
+    }
+    else if (cmd_type == "set_power") {
+      bool enable = cmd["enable"];
+
+      if (enable) {
+        software_kill_active_ = false;
+
+        RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"), 
+                    "SET_POWER ENABLED - Reconnecting all motors");
+
+        reconnect_all_motors();
+      } else {
+        software_kill_active_ = true;
+
+        RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"), 
+                    "SET_POWER DISABLED - Disabling all motors");
+
+        for (size_t i = 0; i < joint_names_.size(); i++) {
+          if (motor_enabled_[i]) {
+            disable_motor(i, "Power disabled");
+          }
+        }
+      }
+    }
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"), 
+                 "Failed to parse software kill command: %s", e.what());
+  }
+}
+
 void PhidgetsBldcHardware::connect_motor(int i)
 {
-  if (connection_attempted_[i]) return;
-  
   connection_attempted_[i] = true;
-  
+
   RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"),
               "Connecting to motor %d: %s...", i, joint_names_[i].c_str());
-  
-  try_attach_motor(i);
-  
-  if (attached_[i]) {
-    motor_enabled_[i] = true;
-    RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"),
-                "Motor %d (%s) CONNECTED", i, joint_names_[i].c_str());
-    try_attach_temperature_sensor(i);
-  } else {
-    motor_enabled_[i] = false;
-    RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
-                "Motor %d (%s) FAILED to connect", i, joint_names_[i].c_str());
+
+  const int max_attempts = 5;
+
+  for (int attempt = 1; attempt <= max_attempts && rclcpp::ok(); attempt++) {
+    try_attach_motor(i);
+
+    if (attached_[i]) {
+      motor_enabled_[i] = true;
+
+      RCLCPP_INFO(rclcpp::get_logger("PhidgetsBldcHardware"),
+                  "Motor %d (%s) CONNECTED (attempt %d)",
+                  i, joint_names_[i].c_str(), attempt);
+
+      try_attach_temperature_sensor(i);
+      return;
+    }
+
+    RCLCPP_WARN(rclcpp::get_logger("PhidgetsBldcHardware"),
+                "Motor %d (%s) failed (attempt %d/%d). Retrying in 3s...",
+                i, joint_names_[i].c_str(), attempt, max_attempts);
+
+    rclcpp::sleep_for(std::chrono::seconds(3));
   }
+
+  // Failed after retries
+  motor_enabled_[i] = false;
+
+  RCLCPP_ERROR(rclcpp::get_logger("PhidgetsBldcHardware"),
+               "Motor %d (%s) FAILED after %d attempts",
+               i, joint_names_[i].c_str(), max_attempts);
 }
 
 void PhidgetsBldcHardware::disable_motor(int i, const std::string& reason)
@@ -300,6 +430,27 @@ PhidgetsBldcHardware::export_command_interfaces()
   }
   return command_interfaces;
 }
+
+PhidgetsBldcHardware::~PhidgetsBldcHardware()
+{
+  // Stop ROS thread
+  if (telemetry_executor_) {
+    telemetry_executor_->cancel();
+  }
+
+  if (telemetry_thread_.joinable()) {
+    telemetry_thread_.join();
+  }
+
+  // Cleanup motors
+  for (size_t i = 0; i < joint_names_.size(); i++) {
+    close_phidget(i);
+    close_temperature_sensor(i);
+  }
+}
+
+
+
 
 hardware_interface::CallbackReturn
 PhidgetsBldcHardware::on_activate(const rclcpp_lifecycle::State &)

@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <algorithm>
+#include <thread>
 
 #include "hardware_interface/system_interface.hpp"
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
@@ -11,8 +12,11 @@
 #include "rclcpp/macros.hpp"
 #include "rclcpp/node.hpp"
 #include "rclcpp/publisher.hpp"
+#include "rclcpp/subscription.hpp"
 #include "rclcpp_lifecycle/state.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "rclcpp/executors/single_threaded_executor.hpp"
+
 
 #include <phidget22.h>
 
@@ -22,8 +26,10 @@ namespace phidgets_hardware
 class PhidgetsBldcHardware : public hardware_interface::SystemInterface
 {
 public:
-  RCLCPP_SHARED_PTR_DEFINITIONS(PhidgetsBldcHardware)
 
+
+  RCLCPP_SHARED_PTR_DEFINITIONS(PhidgetsBldcHardware)
+  ~PhidgetsBldcHardware();
   hardware_interface::CallbackReturn on_init(
     const hardware_interface::HardwareInfo & info) override;
 
@@ -72,7 +78,10 @@ private:
 
   // ROS Communication
   rclcpp::Node::SharedPtr telemetry_node_;
+  rclcpp::executors::SingleThreadedExecutor::SharedPtr telemetry_executor_;
+  std::thread telemetry_thread_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr motor_telemetry_pub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr kill_sub_;
   rclcpp::Time last_telemetry_publish_time_{0, 0, RCL_ROS_TIME};
   double telemetry_publish_period_sec_{0.2};
 
@@ -92,7 +101,11 @@ private:
   bool is_left_wheel_joint(const std::string& joint_name);
   bool is_middle_wheel_joint(const std::string& joint_name);
   bool both_middle_wheels_attached() const;
+  bool software_kill_active_{false};
+  void reconnect_all_motors();
+  
   double axle_weighted_command(size_t i, double left, double right) const;
+  void software_kill_callback(const std_msgs::msg::String::SharedPtr msg);
 };
 
 }  // namespace phidgets_hardware
