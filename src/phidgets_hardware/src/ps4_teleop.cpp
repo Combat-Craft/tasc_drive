@@ -12,7 +12,7 @@ public:
   {
     // Declare parameters with defaults
     this->declare_parameter<int>("axis_linear_x", 1);
-    this->declare_parameter<int>("axis_angular_z", 3);
+    this->declare_parameter<int>("axis_angular_z", 2);
     this->declare_parameter<double>("deadzone", 0.18);
     this->declare_parameter<double>("expo", 1.8);
     this->declare_parameter<double>("speed_scale_normal", 0.5);

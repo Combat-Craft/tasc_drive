@@ -2,7 +2,7 @@ ps4_teleop:
   ros__parameters:
     # Joystick axis mappings
     axis_linear_x: 1       
-    axis_angular_z: 3      
+    axis_angular_z: 2    
     
   
     deadzone: 0.18       
@@ -20,6 +20,6 @@ ps4_teleop:
     
     # Turbo activation (supports BOTH button AND axis)
     turbo_button: 6       
-    turbo_axis: 2        
+    #turbo_axis: 2        
     turbo_threshold: -0.5  
     
