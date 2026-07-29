@@ -16,10 +16,16 @@ ps4_teleop:
     
     # Maximum velocities
     max_linear: 0.0925     
-    max_angular: 0.474     
+    max_angular: 0.474   
+
+    deadman_button: 7
+    turn_on_button: 1
+    kill_button: 2
     
     # Turbo activation (supports BOTH button AND axis)
     turbo_button: 6       
     #turbo_axis: 2        
     turbo_threshold: -0.5  
+
+
     
