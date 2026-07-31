@@ -36,6 +36,7 @@ public:
     this->declare_parameter<int>("left_headlight_button", 4);
     this->declare_parameter<int>("right_headlight_button", 5);
     this->declare_parameter<int>("headlight_brightness_axis", 7);
+    this->declare_parameter<int>("headlight_brightness_fallback_axis", 5);
     this->declare_parameter<double>("headlight_axis_threshold", 0.5);
     this->declare_parameter<int>("headlight_step", 1);
     this->declare_parameter<int>("headlight_update_period_ms", 50);
@@ -73,6 +74,9 @@ public:
 
     headlight_brightness_axis_ =
       this->get_parameter("headlight_brightness_axis").as_int();
+
+    headlight_brightness_fallback_axis_ =
+      this->get_parameter("headlight_brightness_fallback_axis").as_int();
 
     headlight_axis_threshold_ =
       this->get_parameter("headlight_axis_threshold").as_double();
@@ -224,13 +228,20 @@ private:
 
     brightness_direction_ = 0;
 
+    int brightness_axis = headlight_brightness_axis_;
+
     if (
-      headlight_brightness_axis_ >= 0 &&
-      msg->axes.size() >
-        static_cast<size_t>(headlight_brightness_axis_))
+      brightness_axis < 0 ||
+      msg->axes.size() <= static_cast<size_t>(brightness_axis))
     {
-      const double dpad_value =
-        msg->axes[headlight_brightness_axis_];
+      brightness_axis = headlight_brightness_fallback_axis_;
+    }
+
+    if (
+      brightness_axis >= 0 &&
+      msg->axes.size() > static_cast<size_t>(brightness_axis))
+    {
+      const double dpad_value = msg->axes[brightness_axis];
 
       if (dpad_value > headlight_axis_threshold_) {
         brightness_direction_ = 1;
@@ -286,6 +297,9 @@ private:
 
   void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
   {
+    // Headlight controls must remain available without holding the drive
+    // deadman button. The F310 maps button 7 to Start, unlike the PS4's R2.
+    update_headlight_controls(msg);
 
     bool turn_on_pressed = false;
     bool kill_pressed = false;
@@ -426,6 +440,7 @@ private:
   int left_headlight_button_;
   int right_headlight_button_;
   int headlight_brightness_axis_;
+  int headlight_brightness_fallback_axis_;
   double headlight_axis_threshold_;
   int headlight_step_;
   int headlight_update_period_ms_;

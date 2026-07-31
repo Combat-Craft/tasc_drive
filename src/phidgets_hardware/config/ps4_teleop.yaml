@@ -27,5 +27,7 @@ ps4_teleop:
     #turbo_axis: 2        
     turbo_threshold: -0.5  
 
-
-    
+    # D-pad up/down brightness control. Axis 7 is used by the PS4 and the
+    # F310 in XInput mode; axis 5 is the fallback for the F310 in DirectInput.
+    headlight_brightness_axis: 7
+    headlight_brightness_fallback_axis: 5
